@@ -1,6 +1,6 @@
 cabal-version:      2.4
 name:               merge
-version:            0.1.0.0
+version:            0.2.0.0
 synopsis:           A functor for consistent merging of information
 description:        A functor for consistent merging of information.
 author:             Samuel Schlesinger
