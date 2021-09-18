@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -13,9 +14,15 @@ Copyright: Samuel Schlesinger 2021 (c)
 -}
 {-# LANGUAGE BlockArguments #-}
 module Data.Merge
-  ( Merge (Merge, runMerge)
-  , merge
+  ( 
+    -- * A Validation Applicative
+    Validation(..)
+  , validation
+    -- * The Merge type
+  , Merge (Merge, runMerge)
     -- * Construction
+  , (.?)
+  , merge
   , optional
   , required
   , combine
@@ -25,13 +32,11 @@ module Data.Merge
   , Alternative(..)
   , Applicative(..)
     -- * Modification
-  , flattenMaybe
+  , flattenValidation
   , Profunctor(..)
     -- * Useful Semigroups
   , Optional(..)
   , Required(..)
-  , requiredToOptional
-  , optionalToRequired
   , Last (..)
   , First (..)
   , Product (..)
@@ -47,7 +52,36 @@ import Control.Monad (join)
 import Data.Coerce (Coercible, coerce)
 import Control.Applicative (Alternative (..))
 import Data.Profunctor (Profunctor (..))
+import Data.Bifunctor (Bifunctor(..))
 import Data.Semigroup (Last (..), First (..), Product (..), Sum (..), Dual (..), Max (..), Min (..))
+
+-- | Like 'Either', but with an 'Applicative' instance which
+-- accumulates errors using their 'Semigroup' operation.
+data Validation e a =
+    Error e
+  | Success a
+  deriving (Functor, Eq, Ord, Show, Read, Generic, Typeable)
+
+validation :: (e -> r) -> (a -> r) -> Validation e a -> r
+validation f g = \case
+  Error e -> f e
+  Success a -> g a
+
+instance Bifunctor Validation where
+  bimap f g (Error e) = Error (f e)
+  bimap f g (Success a) = Success (g a)
+
+instance Semigroup e => Applicative (Validation e) where
+  pure = Success
+  Success f <*> Success x = Success (f x)
+  Error e   <*> Error e'  = Error (e <> e')
+  Error e   <*> _         = Error e
+  _         <*> Error e'  = Error e'
+
+instance Monoid e => Alternative (Validation e) where
+  empty = Error mempty
+  Success a <|> x = Success a
+  Error e <|> x = x
 
 -- | Describes the merging of two values of the same type
 -- into some other type. Represented as a 'Maybe' valued
@@ -57,101 +91,101 @@ import Data.Semigroup (Last (..), First (..), Product (..), Sum (..), Dual (..),
 -- > data Example = Whatever { a :: Int, b :: Maybe Bool }
 -- > mergeExamples :: Merge Example Example
 -- > mergeExamples = Example <$> required a <*> optional b
-newtype Merge x a = Merge { runMerge :: x -> x -> Maybe a }
+newtype Merge e x a = Merge { runMerge :: x -> x -> Validation e a }
+
+-- | Appends some errors. Useful for the combinators provided by this library,
+-- which use 'mempty' to provide the default error type.
+(.?) :: Semigroup e => Merge e x a -> e -> Merge e x a
+m .? e = Merge \x x' -> bimap (e <>) id (runMerge m x x')
+
+infixl 6 .?
 
 -- | Flattens a 'Maybe' layer inside of a 'Merge'
-flattenMaybe :: Merge x (Maybe a) -> Merge x a
-flattenMaybe (Merge f) = Merge \x x' -> join (f x x')
+flattenValidation :: Merge e x (Validation e a) -> Merge e x a
+flattenValidation (Merge f) = Merge \x x' ->
+  case f x x' of
+    Error e -> Error e
+    Success (Error e) -> Error e
+    Success (Success a) -> Success a
 
 -- | The most general combinator for constructing 'Merge's.
-merge :: (x -> x -> Maybe a) -> Merge x a
+merge :: (x -> x -> Validation e a) -> Merge e x a
 merge = Merge
 
-instance Profunctor Merge where
+instance Profunctor (Merge e) where
   dimap l r (Merge f) = Merge \x x' -> r <$> f (l x) (l x')
 
-instance Functor (Merge x) where
+instance Functor (Merge e x) where
   fmap = rmap
 
-instance Applicative (Merge x) where
-  pure x = Merge (\_ _ -> Just x)
+instance Semigroup e => Applicative (Merge e x) where
+  pure x = Merge (\_ _ -> Success x)
   fa <*> a = Merge \x x' -> runMerge fa x x' <*> runMerge a x x'
 
-instance Alternative (Merge x) where
-  empty = Merge \_ _ -> Nothing
+instance Monoid e => Alternative (Merge e x) where
+  empty = Merge \_ _ -> empty
   Merge f <|> Merge g = Merge \x x' -> f x x' <|> g x x'
 
-instance Monad (Merge x) where
-  a >>= f = Merge \x x' -> join $ fmap (\b -> runMerge b x x') $ fmap f $ runMerge a x x'
+instance (Semigroup e, Semigroup a) => Semigroup (Merge e x a) where
+  a <> b = Merge \x x' -> (<>) <$> runMerge a x x' <*> runMerge b x x'
 
-instance Semigroup a => Semigroup (Merge x a) where
-  a <> b = Merge \x x' -> runMerge a x x' <> runMerge b x x'
-
-instance Semigroup a => Monoid (Merge x a) where
-  mempty = Merge \_ _ -> mempty  
+instance (Monoid e, Semigroup a) => Monoid (Merge e x a) where
+  mempty = Merge \_ _ -> Error mempty  
 
 -- | Meant to be used to merge optional fields in a record.
-optional :: Eq a => (x -> Maybe a) -> Merge x (Maybe a)
-optional = combineGen (maybe (Optional (Just Nothing)) (Optional . Just . Just)) unOptional
+optional :: (Monoid e, Eq a) => (x -> Maybe a) -> Merge e x (Maybe a)
+optional = combineGen (maybe (Optional (Success Nothing)) (Optional . Success . Just)) unOptional
 
 -- | Meant to be used to merge required fields in a record.
-required :: Eq a => (x -> a) -> Merge x a
-required = combineGen (Required . Just) unRequired
+required :: forall e a x. (Monoid e, Eq a) => (x -> a) -> Merge e x a
+required = combineGen (Required . Success) unRequired
 
 -- | Associatively combine original fields of the record.
-combine :: Semigroup a => (x -> a) -> Merge x a
+combine :: forall e a x. Semigroup a => (x -> a) -> Merge e x a
 combine = combineWith (<>)
 
 -- | Combine original fields of the record with the given function.
-combineWith :: (a -> a -> a) -> (x -> a) -> Merge x a
+combineWith :: forall e a x. (a -> a -> a) -> (x -> a) -> Merge e x a
 combineWith c f = Merge (\x x' -> go (f x) (f x')) where
-  go x x' = Just (x `c` x')
+  go x x' = Success (x `c` x')
 
 -- | Sometimes, one can describe a merge strategy via a binary operator. 'Optional'
 -- and 'Required' describe 'optional' and 'required', respectively, in this way.
-combineGenWith :: forall s a x. (s -> s -> s) -> (a -> s) -> (s -> Maybe a) -> (x -> a) -> Merge x a
-combineGenWith c g l f = flattenMaybe $ fmap l $ combineWith c (g . f)
+combineGenWith :: forall e a x s. (s -> s -> s) -> (a -> s) -> (s -> Validation e a) -> (x -> a) -> Merge e x a
+combineGenWith c g l f = flattenValidation $ fmap l $ combineWith c (g . f)
 
 -- | 'combineGen' specialized to 'Semigroup' operations.
-combineGen :: Semigroup s => (a -> s) -> (s -> Maybe a) -> (x -> a) -> Merge x a
+combineGen :: forall e a x s. Semigroup s => (a -> s) -> (s -> Validation e a) -> (x -> a) -> Merge e x a
 combineGen = combineGenWith (<>)
 
 -- | This type's 'Semigroup' instance encodes the simple,
 -- discrete lattice generated by any given set, excluding the
 -- bottom.
-newtype Required a = Required { unRequired :: Maybe a }
+newtype Required e a = Required { unRequired :: Validation e a }
   deriving (Eq, Show, Read, Ord, Generic, Typeable)
 
--- | We can convert any 'Required' to an 'Optional'
--- without losing any information.
-requiredToOptional :: Required a -> Optional a
-requiredToOptional (Required ma) = Optional (fmap Just ma)
-
-instance Eq a => Semigroup (Required a) where
-  Required (Just a) <> Required (Just a')
-    | a == a' = Required (Just a)
-    | otherwise = Required Nothing
-  Required _ <> Required _ = Required Nothing
+instance (Monoid e, Eq a) => Semigroup (Required e a) where
+  Required (Success a) <> Required (Success a')
+    | a == a' = Required (Success a)
+    | otherwise = Required (Error mempty)
+  Required (Error e) <> Required (Success _) = Required (Error e)
+  Required (Success _) <> Required (Error e') = Required (Error e')
+  Required (Error e) <> Required (Error e') = Required (Error (e <> e'))
 
 -- | This type's 'Semigroup' instance encodes the simple,
 -- deiscrete lattice generated by any given set.
-newtype Optional a = Optional { unOptional :: Maybe (Maybe a) }
+newtype Optional e a = Optional { unOptional :: Validation e (Maybe a) }
   deriving (Eq, Show, Read, Ord, Generic, Typeable)
 
--- | We can convert any 'Optional' to a 'Required',
--- entering the 'Required's inconsistent state if
--- the value is absent from the optional.
-optionalToRequired :: Optional a -> Required a
-optionalToRequired = Required . join . unOptional
+instance (Monoid e, Eq a) => Semigroup (Optional e a) where
+  Optional (Success (Just a)) <> Optional (Success (Just a'))
+    | a == a' = Optional (Success (Just a))
+    | otherwise = Optional (Error mempty)
+  Optional (Success Nothing) <> x = x
+  x <> Optional (Success Nothing) = x
+  Optional (Error e) <> Optional (Error e') = Optional (Error (e <> e'))
+  x <> Optional (Error e) = Optional (Error e)
+  Optional (Error e) <> x = Optional (Error e)
 
-instance Eq a => Semigroup (Optional a) where
-  Optional (Just (Just a)) <> Optional (Just (Just a'))
-    | a == a' = Optional (Just (Just a))
-    | otherwise = Optional Nothing
-  Optional (Just Nothing) <> x = x
-  x <> Optional (Just Nothing) = x
-  Optional Nothing <> x = Optional Nothing
-  x <> Optional Nothing = Optional Nothing
-
-instance Eq a => Monoid (Optional a) where
-  mempty = Optional (Just Nothing)
+instance (Monoid e, Eq a) => Monoid (Optional e a) where
+  mempty = Optional (Success Nothing)
