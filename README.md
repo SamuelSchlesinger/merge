@@ -8,7 +8,7 @@ we have a type representing partial information about a digital friend.
 data Friend = Friend
   { name :: Maybe Text
   , email :: Maybe Text
-  , age :: Int
+  , age :: Max Int
   , pubKey :: PublicKey
   }
 ```
@@ -26,14 +26,18 @@ f :: Friend -> Friend -> Maybe Friend
 That's the pattern that this library encapsulates!
 
 ```
-mergeFriends :: Merge Friend Friend
+mergeFriends :: Merge [String] Friend Friend
 mergeFriends =
   User
-    <$> optional name
-    <*> optional email
-    <*> combine Max
-    <*> required pubKey
+    <$> optional name   .? ["name"]
+    <*> optional email  .? ["email"]
+    <*> combine age     .? ["age"]
+    <*> required pubKey .? ["pubKey"]
 
-f :: Friend -> Friend -> Maybe Friend
+f :: Friend -> Friend -> Validation [String] Friend
 f x y = runMerge mergeFriends x y
 ```
+
+We didn't get exactly what we thought we wanted, but this Validation
+type is better: it is an Applicative which accumulates the errors for
+every field.
