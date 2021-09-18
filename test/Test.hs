@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
@@ -13,15 +14,19 @@ requires msg = mapM_ (uncurry go) . zip [1..] where
 
 main :: IO ()
 main = do
-  let merge :: Merge String (Maybe Int, Int, [Int]) (Maybe Int, Int, [Int]) = (,,) <$> optional (\(x,_,_) -> x) <*> required (\(_,x,_) -> x) <*> combine (\(_,_,x) -> x)
-  let merge' :: Merge String Int (Max Int) = combine Max
-  let merge'' :: Merge String Bool (Last Bool) = combine Last
+  let
+    merge = (,,)
+      <$> optional (\(x,_,_) -> x) .? ["fst"]
+      <*> required (\(_,x,_) -> x) .? ["snd"]
+      <*> combine (\(_,_,x) -> x)  .? ["thd"]
+    merge' = combine Max .? ["max"]
+    merge'' = combine Last .? ["last"]
   requires "merge"
     [ runMerge merge (Just 10, 1, []) (Nothing, 1, [1]) == Success (Just 10, 1, [1]) 
     , runMerge merge (Nothing, 1, [2]) (Nothing, 1, [3]) == Success (Nothing, 1, [2, 3])
-    , runMerge merge (Nothing, 1, [1, 2]) (Nothing, 2, [3, 4]) == Error []
-    , runMerge merge (Just 10, 1, [7]) (Just 11, 1, []) == Error []
-    , runMerge merge (Just 10, 1, []) (Just 11, 2, []) == Error []
+    , runMerge merge (Nothing, 1, [1, 2]) (Nothing, 2, [3, 4]) == Error ["snd"]
+    , runMerge merge (Just 10, 1, [7]) (Just 11, 1, []) == Error ["fst"]
+    , runMerge merge (Just 10, 1, []) (Just 11, 2, []) == Error ["fst", "snd"]
     , runMerge merge' 5 10 == Success (Max 10)
     , runMerge merge'' True False == Success (Last False)
     , (((,) <$> Error "Hello" <*> Success 10) :: Validation String (Bool, Int)) == Error "Hello"

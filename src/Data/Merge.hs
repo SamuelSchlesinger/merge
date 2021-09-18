@@ -17,10 +17,12 @@ module Data.Merge
   ( 
     -- * A Validation Applicative
     Validation(..)
+  , validation
     -- * The Merge type
   , Merge (Merge, runMerge)
-  , merge
     -- * Construction
+  , (.?)
+  , merge
   , optional
   , required
   , combine
@@ -53,12 +55,17 @@ import Data.Profunctor (Profunctor (..))
 import Data.Bifunctor (Bifunctor(..))
 import Data.Semigroup (Last (..), First (..), Product (..), Sum (..), Dual (..), Max (..), Min (..))
 
--- | Like either, but with an 'Applicative' instance which
+-- | Like 'Either', but with an 'Applicative' instance which
 -- accumulates errors using their 'Semigroup' operation.
 data Validation e a =
     Error e
   | Success a
-  deriving (Functor, Eq, Ord, Show, Read)
+  deriving (Functor, Eq, Ord, Show, Read, Generic, Typeable)
+
+validation :: (e -> r) -> (a -> r) -> Validation e a -> r
+validation f g = \case
+  Error e -> f e
+  Success a -> g a
 
 instance Bifunctor Validation where
   bimap f g (Error e) = Error (f e)
@@ -85,6 +92,13 @@ instance Monoid e => Alternative (Validation e) where
 -- > mergeExamples :: Merge Example Example
 -- > mergeExamples = Example <$> required a <*> optional b
 newtype Merge e x a = Merge { runMerge :: x -> x -> Validation e a }
+
+-- | Appends some errors. Useful for the combinators provided by this library,
+-- which use 'mempty' to provide the default error type.
+(.?) :: Semigroup e => Merge e x a -> e -> Merge e x a
+m .? e = Merge \x x' -> bimap (e <>) id (runMerge m x x')
+
+infixl 6 .?
 
 -- | Flattens a 'Maybe' layer inside of a 'Merge'
 flattenValidation :: Merge e x (Validation e a) -> Merge e x a
@@ -123,25 +137,25 @@ optional :: (Monoid e, Eq a) => (x -> Maybe a) -> Merge e x (Maybe a)
 optional = combineGen (maybe (Optional (Success Nothing)) (Optional . Success . Just)) unOptional
 
 -- | Meant to be used to merge required fields in a record.
-required :: (Monoid e, Eq a) => (x -> a) -> Merge e x a
+required :: forall e a x. (Monoid e, Eq a) => (x -> a) -> Merge e x a
 required = combineGen (Required . Success) unRequired
 
 -- | Associatively combine original fields of the record.
-combine :: Semigroup a => (x -> a) -> Merge e x a
+combine :: forall e a x. Semigroup a => (x -> a) -> Merge e x a
 combine = combineWith (<>)
 
 -- | Combine original fields of the record with the given function.
-combineWith :: (a -> a -> a) -> (x -> a) -> Merge e x a
+combineWith :: forall e a x. (a -> a -> a) -> (x -> a) -> Merge e x a
 combineWith c f = Merge (\x x' -> go (f x) (f x')) where
   go x x' = Success (x `c` x')
 
 -- | Sometimes, one can describe a merge strategy via a binary operator. 'Optional'
 -- and 'Required' describe 'optional' and 'required', respectively, in this way.
-combineGenWith :: forall s a x e. (s -> s -> s) -> (a -> s) -> (s -> Validation e a) -> (x -> a) -> Merge e x a
+combineGenWith :: forall e a x s. (s -> s -> s) -> (a -> s) -> (s -> Validation e a) -> (x -> a) -> Merge e x a
 combineGenWith c g l f = flattenValidation $ fmap l $ combineWith c (g . f)
 
 -- | 'combineGen' specialized to 'Semigroup' operations.
-combineGen :: Semigroup s => (a -> s) -> (s -> Validation e a) -> (x -> a) -> Merge e x a
+combineGen :: forall e a x s. Semigroup s => (a -> s) -> (s -> Validation e a) -> (x -> a) -> Merge e x a
 combineGen = combineGenWith (<>)
 
 -- | This type's 'Semigroup' instance encodes the simple,
