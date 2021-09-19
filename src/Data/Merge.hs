@@ -21,12 +21,13 @@ module Data.Merge
     -- * The Merge type
   , Merge (Merge, runMerge)
     -- * Construction
-  , (.?)
   , merge
   , optional
   , required
   , combine
   , combineWith
+  , (.?)
+  , (.!)
   , combineGen
   , combineGenWith
   , Alternative(..)
@@ -97,6 +98,10 @@ newtype Merge e x a = Merge { runMerge :: x -> x -> Validation e a }
 -- which use 'mempty' to provide the default error type.
 (.?) :: Semigroup e => Merge e x a -> e -> Merge e x a
 m .? e = Merge \x x' -> bimap (e <>) id (runMerge m x x')
+
+-- | Applies an arbitrary function to the error.
+(.!) :: Merge e x a -> (e -> e') -> Merge e' x a
+m .! f = Merge \x x' -> bimap f id (runMerge m x x')
 
 infixl 6 .?
 
