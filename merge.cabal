@@ -12,6 +12,9 @@ copyright:          2020 Samuel Schlesinger
 category:           Data
 extra-source-files: CHANGELOG.md, README.md
 build-type:         Simple
+tested-with:        GHC ==9.6.7
+homepage:           https://github.com/SamuelSchlesinger/merge
+bug-reports:        https://github.com/SamuelSchlesinger/merge/issues
 
 source-repository head
   type: git
