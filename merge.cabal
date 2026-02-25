@@ -1,8 +1,12 @@
 cabal-version:      2.4
 name:               merge
-version:            0.3.1.1
+version:            0.4.0.0
 synopsis:           A functor for consistent merging of information
-description:        A functor for consistent merging of information.
+description:        A functor for consistent merging of information,
+                    parameterized by effects. Supports error-accumulating
+                    merges via Validation, fail-fast merges via Either,
+                    and any other Applicative effect. Includes generic
+                    deriving for simple merge strategies.
 author:             Samuel Schlesinger
 maintainer:         sgschlesinger@gmail.com
 extra-source-files: CHANGELOG.md
@@ -30,5 +34,5 @@ test-suite test
   type: exitcode-stdio-1.0
   main-is: Test.hs
   hs-source-dirs: test
-  build-depends: base >= 4.6 && <5, merge
+  build-depends: base >= 4.6 && <5, merge, QuickCheck >= 2.14
   default-language: Haskell2010
